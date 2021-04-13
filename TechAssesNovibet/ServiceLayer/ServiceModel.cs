@@ -1,4 +1,5 @@
 ﻿using DynamicLinkLibrary.Interfaces;
+using DynamicLinkLibrary.Models;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection;
 using System;
@@ -23,6 +24,7 @@ namespace TechAssesNovibet.ServiceLayer
             _cache = cache;
         }
 
+        #region IServiceModel
         public IIPdetails GetByIP(string ipAddress)
         {
             try
@@ -39,6 +41,7 @@ namespace TechAssesNovibet.ServiceLayer
                     var dbObject = context.IpDetails.Find(ipAddress);
                     if (dbObject != null)
                     {
+                        _cache.Set(ipAddress, dbObject, new MemoryCacheEntryOptions() { AbsoluteExpirationRelativeToNow = new TimeSpan(0, 1, 0) });
                         return dbObject;
                     }
                     else
@@ -66,6 +69,37 @@ namespace TechAssesNovibet.ServiceLayer
             InitiateBatch(ipAddresses, batchProcess);
             return batchProcess.BatchId;
         }
+
+        public string GetBatchProcess(Guid processId)
+        {
+            using var scope = _serviceScopeFactory.CreateScope();
+            var context = scope.ServiceProvider.GetService<NovibetContext>();
+            var process = context.BatchProcesses.FirstOrDefault(x => x.BatchId == processId);
+            if (process != null)
+            {
+                if (!process.IsCompleted.Value)
+                {
+                    var addresses = context.BatchAddresses.Where(x => x.FBatchId == processId).ToList();
+                    if (addresses.Count > 0)
+                    {
+                        return $"Process is being completed { addresses.Count(x => x.IsCompleted.Value) } of { addresses.Count }";
+                    }
+                    else
+                    {
+                        return "Process has not started yet";
+                    }
+                }
+                else
+                {
+                    return "Process is Completed";
+                }
+            }
+            else
+            {
+                return "Process could not found";
+            }
+        }
+        #endregion
 
         private IIPdetails CallServiceProvider(string ipAddress)
         {
@@ -153,34 +187,6 @@ namespace TechAssesNovibet.ServiceLayer
             }, batchProcess);
         }
 
-        public string GetBatchProcess(Guid processId)
-        {
-            using var scope = _serviceScopeFactory.CreateScope();
-            var context = scope.ServiceProvider.GetService<NovibetContext>();
-            var process = context.BatchProcesses.FirstOrDefault(x => x.BatchId == processId);
-            if (process != null)
-            {
-                if (!process.IsCompleted.Value)
-                {
-                    var addresses = context.BatchAddresses.Where(x => x.FBatchId == processId).ToList();
-                    if(addresses.Count > 0)
-                    {
-                        return $"Process is being completed { addresses.Count(x => x.IsCompleted.Value) } of { addresses.Count }";
-                    }
-                    else
-                    {
-                        return "Process has not started yet";
-                    }
-                }
-                else
-                {
-                    return "Process is Completed";
-                }
-            }
-            else
-            {
-                return "Process has not started yet";
-            }
-        }
+
     }
 }

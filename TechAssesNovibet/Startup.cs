@@ -24,7 +24,6 @@ namespace TechAssesNovibet
         // This method gets called by the runtime. Use this method to add services to the container.
         public void ConfigureServices(IServiceCollection services)
         {
-
             services.AddControllers();
             services.AddMemoryCache();
             services.AddDbContext<NovibetContext>(options =>
@@ -35,6 +34,7 @@ namespace TechAssesNovibet
                     sqlOptions.EnableRetryOnFailure();
                 });
             });
+            services.AddSingleton<IConfigManager, ConfigurationManager>();
             services.AddScoped<IIPInfoProvider, IpService>();
             services.AddScoped<IServiceModel, ServiceModel>();
             services.AddSwaggerGen(c =>

@@ -1,5 +1,6 @@
 ﻿using DynamicLinkLibrary.Interfaces;
 using DynamicLinkLibrary.Models;
+using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
@@ -23,6 +24,7 @@ namespace TechAssesNovibet.Repository
         public string IpAddress { get; set; }
 
         [NotMapped]
+        [JsonIgnore]
         public Guid BatchProcessId { get; set; }
 
     }

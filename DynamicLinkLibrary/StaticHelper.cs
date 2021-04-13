@@ -19,19 +19,28 @@ namespace DynamicLinkLibrary
             return JsonConvert.SerializeObject(obj);
         }
 
-        public static IpDetails GetLocation(string ipAddress)
+        public static bool IsNullOrEmpty(this JToken token)
+        {
+            return (token == null) ||
+                   (token.Type == JTokenType.Array && !token.HasValues) ||
+                   (token.Type == JTokenType.Object && !token.HasValues) ||
+                   (token.Type == JTokenType.String && token.ToString() == String.Empty) ||
+                   (token.Type == JTokenType.Null);
+        }
+
+        public static IpDetails GetLocation(string ipAddress, string apiKey)
         {
             try
             {
-                string url = "http://api.ipstack.com/" + ipAddress + "?access_key=e162ade6d7524e5236473f3e27ef632e";
+                string url = "http://api.ipstack.com/" + ipAddress + $"?access_key={apiKey}";
                 var request = WebRequest.Create(url);
                 using WebResponse wrs = request.GetResponse();
                 using Stream stream = wrs.GetResponseStream();
                 using StreamReader reader = new(stream);
                 string json = reader.ReadToEnd();
                 var obj = JObject.Parse(json);
-                if (obj.SelectToken("type") == null)
-                    throw new IPServiceNotAvailableException($"Empty Response for the IP Address -{ipAddress}-");
+                if (obj.SelectToken("type").IsNullOrEmpty())
+                    throw new IPServiceNotAvailableException($"Couldn't find location for the IP Address -{ipAddress}-");
 
                 string city = (string)obj["city"];
                 string country = (string)obj["country_name"];
