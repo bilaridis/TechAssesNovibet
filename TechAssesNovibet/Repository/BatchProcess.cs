@@ -17,6 +17,8 @@ namespace TechAssesNovibet.Repository
         public Guid BatchId { get; set; }
         public bool? IsCompleted { get; set; }
         public DateTime? Finished { get; set; }
+        public string Status { get; set; }
+        public string ExceptionMessage { get; set; }
 
         public virtual ICollection<BatchAddress> BatchAddresses { get; set; }
     }

@@ -1,4 +1,5 @@
-﻿using DynamicLinkLibrary.Interfaces;
+﻿using DynamicLinkLibrary;
+using DynamicLinkLibrary.Interfaces;
 using DynamicLinkLibrary.Models;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection;
@@ -11,6 +12,15 @@ using TechAssesNovibet.Repository;
 
 namespace TechAssesNovibet.ServiceLayer
 {
+    public enum Statuses
+    {
+        Registered,
+        Initiating,
+        Initiated,
+        Ongoing,
+        Completed,
+        Failed
+    }
     public class ServiceModel : IServiceModel
     {
         private readonly IServiceScopeFactory _serviceScopeFactory;
@@ -53,51 +63,69 @@ namespace TechAssesNovibet.ServiceLayer
                     }
                 }
             }
-            catch (Exception)
+            catch (Exception ex)
             {
-                throw;
+                throw new IPServiceNotAvailableException(ex.Message);
             }
         }
 
         public Guid RegisterBatch(List<string> ipAddresses)
         {
-            using var scope = _serviceScopeFactory.CreateScope();
-            var context = scope.ServiceProvider.GetService<NovibetContext>();
-            var batchProcess = new BatchProcess();
-            context.BatchProcesses.Add(batchProcess);
-            context.SaveChanges();
-            InitiateBatch(ipAddresses, batchProcess);
-            return batchProcess.BatchId;
+            try
+            {
+                using var scope = _serviceScopeFactory.CreateScope();
+                var context = scope.ServiceProvider.GetService<NovibetContext>();
+                var batchProcess = new BatchProcess();
+                context.BatchProcesses.Add(batchProcess);
+                batchProcess.Status = Statuses.Registered.ToString();
+                context.SaveChanges();
+                InitiateBatch(ipAddresses, batchProcess);
+                return batchProcess.BatchId;
+            }
+            catch (Exception ex)
+            {
+
+                throw new IPServiceNotAvailableException(ex.Message);
+            }
         }
 
         public string GetBatchProcess(Guid processId)
         {
-            using var scope = _serviceScopeFactory.CreateScope();
-            var context = scope.ServiceProvider.GetService<NovibetContext>();
-            var process = context.BatchProcesses.FirstOrDefault(x => x.BatchId == processId);
-            if (process != null)
+            try
             {
-                if (!process.IsCompleted.Value)
+                using var scope = _serviceScopeFactory.CreateScope();
+                var context = scope.ServiceProvider.GetService<NovibetContext>();
+                var process = context.BatchProcesses.FirstOrDefault(x => x.BatchId == processId);
+                if (process != null)
                 {
-                    var addresses = context.BatchAddresses.Where(x => x.FBatchId == processId).ToList();
-                    if (addresses.Count > 0)
+                    if (!process.IsCompleted.Value)
                     {
-                        return $"Process is being completed { addresses.Count(x => x.IsCompleted.Value) } of { addresses.Count }";
+                        var addresses = context.BatchAddresses.Where(x => x.FBatchId == processId).ToList();
+                        if (addresses.Count > 0)
+                        {
+                            return $"Process Status : {process.Status} - { addresses.Count(x => x.IsCompleted.Value) } of { addresses.Count }";
+                        }
+                        else
+                        {
+                            return $"Process Status {process.Status} - Message : {process.ExceptionMessage}";
+                        }
                     }
                     else
                     {
-                        return "Process has not started yet";
+                        return $"Process is Completed - Status : {process.Status} - Message : {process.ExceptionMessage}";
                     }
                 }
                 else
                 {
-                    return "Process is Completed";
+                    return "Process could not found";
                 }
             }
-            else
+            catch (Exception ex)
             {
-                return "Process could not found";
+
+                throw new IPServiceNotAvailableException(ex.Message);
             }
+
         }
         #endregion
 
@@ -112,34 +140,46 @@ namespace TechAssesNovibet.ServiceLayer
         {
             var taskJob = Task.Factory.StartNew((Object obj) =>
             {
+                using var scope = _serviceScopeFactory.CreateScope();
+                var context = scope.ServiceProvider.GetService<NovibetContext>();
                 var objectCollection = obj as Object[];
                 var batchProcessObject = objectCollection[0] as BatchProcess;
                 var ListOfipAddresses = objectCollection[1] as List<string>;
                 if (batchProcessObject == null) return;
 
-                using var scope = _serviceScopeFactory.CreateScope();
-                var context = scope.ServiceProvider.GetService<NovibetContext>();
-                foreach (string ipAddress in ListOfipAddresses)
+                try
                 {
-                    context.BatchAddresses.Add(new BatchAddress() { IpAddress = ipAddress, FBatchId = batchProcessObject.BatchId, IsCompleted = false });
-                    var dbObject = context.IpDetails.Find(ipAddress);
-                    if (dbObject == null)
+                    UpdateBatchRow(batchProcessObject, context, Statuses.Initiating);
+                    foreach (string ipAddress in ListOfipAddresses)
                     {
-                        IIPdetails ipStackObject = CallServiceProvider(ipAddress);
-                        context.IpDetails.Add(new IpDetail(ipStackObject, ipAddress));
+                        var dbObject = context.IpDetails.Find(ipAddress);
+                        if (dbObject == null)
+                        {
+                            IIPdetails ipStackObject = CallServiceProvider(ipAddress);
+                            context.BatchAddresses.Add(new BatchAddress() { IpAddress = ipAddress, FBatchId = batchProcessObject.BatchId, IsCompleted = false });
+                            context.IpDetails.Add(new IpDetail(ipStackObject, ipAddress));
+                        }
+                        else
+                        {
+                            IIPdetails ipStackObject = CallServiceProvider(ipAddress);
+                            context.BatchAddresses.Add(new BatchAddress() { IpAddress = ipAddress, FBatchId = batchProcessObject.BatchId, IsCompleted = false });
+                            context.Entry(dbObject).CurrentValues.SetValues(new IpDetail(ipStackObject, ipAddress));
+                        }
                     }
-                    else
-                    {
-                        IIPdetails ipStackObject = CallServiceProvider(ipAddress);
-                        context.Entry(dbObject).CurrentValues.SetValues(new IpDetail(ipStackObject, ipAddress));
-                    }
+
+                    UpdateBatchRow(batchProcessObject, context, Statuses.Initiated, true);
+                    RunBatch(batchProcessObject);
                 }
-                context.SaveChanges();
-                RunBatch(batchProcessObject);
+                catch (Exception ex)
+                {
+                    UpdateBatchRow(batchProcessObject, context, Statuses.Failed, true, ex);
+                    throw;
+                }
+
             }, new object[]
-              { 
-                  batchProcess , 
-                  ipAddresses 
+              {
+                  batchProcess ,
+                  ipAddresses
               });
         }
 
@@ -151,42 +191,56 @@ namespace TechAssesNovibet.ServiceLayer
                 if (batchProcessObject == null) return;
                 using var scope = _serviceScopeFactory.CreateScope();
                 var context = scope.ServiceProvider.GetService<NovibetContext>();
-                var arrayOfAddresses = context.BatchAddresses.Where(x => x.FBatchId == batchProcess.BatchId);
-                while (arrayOfAddresses.Any())
+                UpdateBatchRow(batchProcessObject, context, Statuses.Ongoing);
+                try
                 {
-                    var batch = arrayOfAddresses.Take(10);
-                    arrayOfAddresses = arrayOfAddresses.Skip(10);
-
-                    foreach (var item in batch)
+                    var arrayOfAddresses = context.BatchAddresses.Where(x => x.FBatchId == batchProcess.BatchId);
+                    while (arrayOfAddresses.Any())
                     {
-                        var dbObject = context.IpDetails.Find(item.IpAddress);
-                        if (dbObject == null)
-                        {
-                            IIPdetails ipStackObject = CallServiceProvider(item.IpAddress);
-                            context.IpDetails.Add(new IpDetail(ipStackObject, item.IpAddress));
-                        }
-                        else
-                        {
-                            IIPdetails ipStackObject = CallServiceProvider(item.IpAddress);
-                            context.Entry(dbObject).CurrentValues.SetValues(new IpDetail(ipStackObject, item.IpAddress));
-                        }
-                        var batchAddress = context.BatchAddresses.FirstOrDefault(x => x.IpAddress == item.IpAddress && x.FBatchId == batchProcessObject.BatchId);
-                        if (batchAddress != null)
-                        {
-                            batchAddress.IsCompleted = true;
-                        }
-                    }
-                    context.SaveChanges();
-                }
+                        var batch = arrayOfAddresses.Take(10);
+                        arrayOfAddresses = arrayOfAddresses.Skip(10);
 
-                batchProcessObject.IsCompleted = true;
-                batchProcessObject.Finished = DateTime.Now;
-                var processObject = context.BatchProcesses.Find(batchProcessObject.BatchId);
-                context.Entry(processObject).CurrentValues.SetValues(batchProcessObject);
-                context.SaveChanges();
+                        foreach (var item in batch)
+                        {
+                            var dbObject = context.IpDetails.Find(item.IpAddress);
+                            if (dbObject == null)
+                            {
+                                IIPdetails ipStackObject = CallServiceProvider(item.IpAddress);
+                                context.IpDetails.Add(new IpDetail(ipStackObject, item.IpAddress));
+                            }
+                            else
+                            {
+                                IIPdetails ipStackObject = CallServiceProvider(item.IpAddress);
+                                context.Entry(dbObject).CurrentValues.SetValues(new IpDetail(ipStackObject, item.IpAddress));
+                            }
+                            var batchAddress = context.BatchAddresses.FirstOrDefault(x => x.IpAddress == item.IpAddress && x.FBatchId == batchProcessObject.BatchId);
+                            if (batchAddress != null)
+                            {
+                                batchAddress.IsCompleted = true;
+                            }
+                        }
+                        context.SaveChanges();
+                    }
+
+                    UpdateBatchRow(batchProcessObject, context, Statuses.Completed, true);
+                }
+                catch (Exception ex)
+                {
+                    UpdateBatchRow(batchProcessObject, context, Statuses.Failed, true, ex);
+                    throw;
+                }
             }, batchProcess);
         }
 
-
+        private static void UpdateBatchRow(BatchProcess batchProcessObject, NovibetContext context, Statuses status, bool completeFlag = false, Exception ex = null, DateTime? finished = null)
+        {
+            batchProcessObject.IsCompleted = completeFlag;
+            batchProcessObject.Status = status.ToString();
+            batchProcessObject.Finished = finished;
+            batchProcessObject.ExceptionMessage = ex?.Message;
+            var processObject = context.BatchProcesses.Find(batchProcessObject.BatchId);
+            context.Entry(processObject).CurrentValues.SetValues(batchProcessObject);
+            context.SaveChanges();
+        }
     }
 }

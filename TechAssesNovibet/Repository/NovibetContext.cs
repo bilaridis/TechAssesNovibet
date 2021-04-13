@@ -59,6 +59,10 @@ namespace TechAssesNovibet.Repository
 
                 entity.ToTable("batchProcesses");
 
+                entity.Property(e => e.Status)
+                    .HasMaxLength(50)
+                    .IsUnicode(false);
+
                 entity.Property(e => e.Finished).HasColumnType("datetime");
             });
 
